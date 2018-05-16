@@ -748,6 +748,139 @@ Formatting is according to the commit message conventions."
      (process-lines
       "git" "diff-index" "--name-only" "--cached" "HEAD" "--" "lib/"))))
 
+;;; Cryptographic verification
+
+(defun borg-verify (drone &optional object as-tag non-exhaustive)
+  "Verify authenticity of DRONE.
+
+Return non-nil if and only if OBJECT has a valid signature
+matching a value in submodule.DRONE.signing-key.
+
+OBJECT is the ID of the object to verify.  It defaults to HEAD.
+
+If AS-TAG is nil, OBJECT is interpreted as a commit identifier,
+otherwise as a tag name.
+
+By default, this function will verify all signable objects
+corresponding to OBJECT: the object or tag itself, any tag
+pointing to the same commit object or the commit the tag object
+points to.  Setting NON-EXHAUSTIVE to non-nil disables this
+behavior."
+  (interactive (list (completing-read "Verify drone: " (borg-drones) nil t)))
+  )
+
+(defun borg--accepted-signing-keys (drone)
+  "Return the list of key IDs that should be accepted for signing DRONE."
+  (borg-get-all drone "signingkey"))
+
+(defun borg-drone-signatures (drone &optional object as-tag non-exhaustive)
+  "Return the list of valid signatures of DRONE on OBJECT.
+
+OBJECT, AS-TAG and NON-EXHAUSTIVE are interpreted as in
+`borg-verify', which see."
+  (unless object
+    (setq object "HEAD"))
+
+  (if non-exhaustive
+      ;; Immediately perform verification
+
+      ;; Recursively verify
+      )
+    )
+
+(defun borg--list-equivalent-signable-objects (drone &optional object as-tag)
+  "Return Git objects on DRONE with the same contents as OBJECT.
+
+This function is used in the context of cryptographic
+verification of drones to prevent false negatives: it is possible
+that not all equivalent objects are signed.  For example, some
+people may sign only tags, but not individual commits.  Since we
+usually start from a commit ID (the submodule position), this
+function will enumerate equivalent objects which could also be
+signed.
+
+Return value is a non-empty list of (OBJECT-ID . AS-TAG).  Its
+car is the provided OBJECT.
+
+OBJECT is interpreted as a commit identifier if AS-TAG is nil, as
+a tag name otherwise.  If it is a commit identifier, all tag
+objects pointing to that commit are returned.  If a tag, the
+commit this tag points to is returned, along with all other tags
+pointing to this commit."
+
+  (unless object
+    (setq object "HEAD"))
+
+  (let ((default-directory (expand-file-name drone borg-drone-directory)))
+    (-non-nil (-flatten-n 1 (list `((,object ,as-tag))
+          (if as-tag ;;
+
+              (let ((commit (car (magit-git-lines "show-ref" "--hash" "--tags" object))))
+                (-flatten-n 1 (list
+                 ;; The commit itself.
+                 (list (list commit nil))
+
+                 ;; All tags, but OBJECT, pointing to this commit.
+                 (mapcar (lambda (tag) (list tag t))
+                         (remove object
+                          (magit-git-lines "tag" "--points-at" commit))))))
+
+            ;; (if as-tag: ELSE
+            ;; Just enumerate tags pointing to OBJECT.
+            (mapcar (lambda (commit) (list commit t))
+                    (magit-git-lines "tag" "--points-at" object))))))))
+
+(defun borg--parse-verify-output (lines)
+  "Parse LINES as output of git verify-[tag,commit] --raw ...
+
+Returns a possibly empty list of (KEYID OWNERID)."
+  (-non-nil
+   (mapcar (lambda (str)
+             ;; @FIXME Verify.
+             ;; The regexp below is based on the actual output of the
+             ;; program and on documentation found here:
+             ;; https://www.gnupg.org/documentation/manuals/gnupg/Automated-signature-checking.html
+             (when (string-match (rx
+                                  line-start
+                                  "[GNUPG:] GOODSIG "
+                                  (group (one-or-more hex-digit))
+                                  " "
+                                  (group (one-or-more any))
+                                  line-end)
+                                 str)
+               `(,(match-string 1 str)
+                 ,(match-string 2 str))))
+           lines)))
+
+(defun borg--gpg-collect-fingerprints (keys)
+  "Run gpg --list-keys --with-csolons KEYS, and return a list of fingerprints.
+
+KEYS is a list of string."
+  (let ((fprs nil))
+    (with-temp-buffer
+      (apply #'call-process epg-gpg-program nil t nil
+             "--list-keys" "--with-colons" "--" keys)
+      (goto-char (point-min))
+      (while (re-search-forward "^pub" nil t)
+        (when (re-search-forward "^fpr" nil t)
+          (push (nth 9 (split-string (buffer-substring-no-properties
+                                      (line-beginning-position)
+                                      (line-end-position))
+                                     ":"))
+                fprs)))
+      fprs)))
+
+(defun borg--gpg-match-keys (keys other-keys)
+  "Return non-nil iff KEYS and OTHER-KEYS intersect.
+
+KEYS and OTHER-KEYS are list of strings, which should be valid
+GnuPG key identifiers.  The return value is the
+intersection (list of key fingerprint strings) of the keys or
+nil"
+  (cl-intersection (borg-queen--gpg-collect-fingerprints keys)
+                   (borg-queen--gpg-collect-fingerprints other-keys)
+                   :test #'equalp))
+
 ;;; Internal Utilities
 
 (defun borg--maybe-absorb-gitdir (pkg)

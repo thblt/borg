@@ -364,6 +364,20 @@ remote in the super-repository by setting ~submodule.DRONE.remote~ in
   automatically configures FORK to be used as the push-remote by
   setting ~remote.pushDefault~ to FORK.
 
+* Verifying drones
+
+Borg makes it easy to verify authenticity of drones by checking their
+PGP signature before activating them.
+
+- Variable: submodule.DRONE.signingkey "KEYID"
+
+  This variable specifies the PGP key identifier(s) that should be
+  accepted for signing this drone.  It may be repeated to allow
+  multiple keys, but each identifier must not be ambiguous in the
+  context of the user's keyring.  This means, for example, that e-mail
+  addresses or short IDs are valid identifiers if and only if exactly
+  one public key has this address as its UID.
+
 * Make targets
 
 The following ~make~ targets are available in ~~/.emacs.d/Makefile~.
